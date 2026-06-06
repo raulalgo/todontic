@@ -1,0 +1,6 @@
+{
+  "name": "@todontic/mcp-image-gen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bundled image-gen MCP server (configurable backend). Co-wedge per D-017. Source for the binary referenced from the user's CLI config per D-008."
+}

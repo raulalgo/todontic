@@ -1,0 +1,30 @@
+{
+  "name": "todontic",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agentic to-do list — BYO-AI, central command for the orchestration stack, markdown-native.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.18.0",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @todontic/desktop dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "pnpm --filter @todontic/desktop test:e2e",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@playwright/test": "^1.49.1",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "electron", "esbuild"]
+  }
+}

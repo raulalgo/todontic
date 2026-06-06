@@ -1,0 +1,6 @@
+{
+  "name": "@todontic/mcp-filesystem",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bundled filesystem MCP server (allow-listed paths). Source for the binary referenced from the user's CLI config per D-008."
+}

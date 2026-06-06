@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+*.tsbuildinfo
+.DS_Store
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.log
+
+# Local scratch: orchestration plan / review artifacts
+.claude/temp/

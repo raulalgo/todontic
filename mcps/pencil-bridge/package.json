@@ -1,0 +1,6 @@
+{
+  "name": "@todontic/mcp-pencil-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bundled Pencil MCP bridge for the Designer skill (.pen artifact edits). Source for the binary referenced from the user's CLI config per D-008."
+}
