@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["electron-vite/node"],
+    "noEmit": true
+  },
+  "include": [
+    "main",
+    "preload",
+    "renderer",
+    "electron.vite.config.ts",
+    "playwright.config.ts",
+    "e2e"
+  ]
+}
