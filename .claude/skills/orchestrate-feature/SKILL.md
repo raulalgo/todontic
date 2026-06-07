@@ -232,7 +232,9 @@ Spawn with `subagent_type: "general-purpose"`, `model: "sonnet"`. Store result f
 1. **Final smoke check** (only test run orchestrator does itself):
    - Run the project's typecheck command (if the stack has one)
    - Run the project's test command (if a test framework is wired)
+   - **Run the project's e2e suite if one exists** (Playwright/Cypress/etc.) — build first if it requires a build. Unit + jsdom tests run against mocks and routinely pass while the real app is broken; the e2e is the only stage that exercises the actual wiring. This is mandatory for any user-facing change. If there is no e2e for the feature's headline journey, that is itself a gap (see step 1b).
    - Confirm green. If red, stop and surface — do not hand off red.
+   1b. **Real-app reachability gate (user-facing features only).** Before declaring done, confirm the headline user journey is *proven reachable in the real app with realistic data* — not just covered by unit tests. The acceptable proofs, in order: (a) an e2e test that launches the real app, seeds a **realistic specimen** (a plain/uncoded/empty case, ideally from the project's sample/test fixtures — NOT a fixture hand-shaped to match the implementation), and drives the journey; or (b) you run the app and observe it. If neither exists, do NOT hand off as complete: spawn one more implementator pass to add the e2e, or surface to the user that the feature is unverified end-to-end. Twice-burned rule: "green unit suite" is not "it works." The recurring failure is a component that exists and passes mocked tests but is unreachable or fed the wrong data source — catch it here if QA's reachability lens didn't.
 2. **Produce handover message.** Structure:
 
 ```markdown
@@ -284,7 +286,7 @@ Spawn with `subagent_type: "general-purpose"`, `model: "sonnet"`. Store result f
 - Validate return values exist (paths, structured headings).
 - Surface questions and blockers verbatim.
 - Cap fix-loop iterations and escalate to user.
-- Run final type-check + test smoke before hand-off.
+- Run final type-check + test smoke before hand-off — INCLUDING the e2e suite if one exists, and a real-app reachability check for user-facing features (Stage 5 step 1/1b). A green unit suite is not proof the feature works.
 - Produce final hand-off summary by stitching subagent return values.
 
 ## Invocation

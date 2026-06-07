@@ -38,7 +38,9 @@ Do not infer, guess, or fabricate a plan. Vague verbal descriptions ("just add a
 - No speculative error handling, no future-proofing, no compatibility shims unless plan calls for them.
 - Match project conventions already in repo. Read neighbouring files before writing new ones.
 - Prefer editing existing files over creating new ones.
-- UI changes: exercise feature in browser per project root guidance before claiming done.
+- **Test with realistic, code-independent fixtures.** Never shape a test's mock/fixture to match what your code happens to do — that just re-asserts your own assumption and passes while the app breaks. Use a realistic specimen (a plain/uncoded/empty case, ideally from the project's sample/test data), and derive the expected value independently of how the SUT derives it. If your feature reads a data source, write at least one test proving it handles the *general* case, not just the demo-shaped one.
+- **Wiring is part of the feature.** A component/hook/function that exists and passes unit tests but isn't mounted in a reachable route, or is fed a narrower data source than the real one, is NOT done. For any user-facing slice, add or extend a test (e2e if the project has one, else an app-level integration test) that proves the headline journey is reachable from where a real user starts, with realistic data.
+- **UI changes: actually run the real app** (browser/Electron) per project root guidance before claiming done — or, if you cannot launch it, say so explicitly in your report and ensure an e2e covers the journey. "Unit tests green" is not "it works."
 
 ## Mid-implementation unrelated change request
 

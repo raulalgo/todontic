@@ -24,9 +24,13 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { buildIndex, parsePage, reserveCodes, serializePage } from '@todontic/core'
+import { buildIndex, parsePage, reserveCodes, serializePage, parseOutline, serializeOutline, planPromotion } from '@todontic/core'
 import type {
+  IndexSummary,
+  PageSummary,
   ParsedPage,
+  PromotionRequest,
+  PromotionResult,
   Status,
   VaultConfig,
   VaultEventPayload,
@@ -40,6 +44,7 @@ import {
   saveConfig,
 } from './configStore.js'
 import { scanVault } from './scan.js'
+import { trashItem } from './trash.js'
 import { VaultWatcher } from './watcher.js'
 
 // ─── Async mutex ──────────────────────────────────────────────────────────────
@@ -312,6 +317,266 @@ export class VaultManager {
     } finally {
       this.configMutex.release()
     }
+  }
+
+  // ─── Delete / promote (stubs — full impl in Slices 9-10) ─────────────────
+
+  /**
+   * Move a page file to the OS trash (recoverable). Updates index + emits unlinked.
+   * Full implementation in Slice 10 (`vault/trash.ts` + `shell.trashItem`).
+   * Stub here so the IPC channel compiles and the interface is complete.
+   */
+  async deletePage(relPath: string): Promise<void> {
+    const vault = this.requireVault()
+    const absPath = path.join(vault.rootPath, relPath)
+    // Remove from in-memory index immediately.
+    vault.pages.delete(relPath)
+    rebuildIndex(vault)
+    // Register as a self-write BEFORE trashing so the chokidar `unlinked` event
+    // that fires after the file is removed is suppressed — without this the
+    // watcher would emit a second `unlinked` event, causing double-processing
+    // and surfacing a spurious "deleted" banner in the open page (QA Bug #4).
+    vault.watcher.registerSelfWrite(absPath)
+    // Move to OS trash (recoverable). Falls back to fs.unlink in non-Electron env.
+    await trashItem(absPath)
+    // Emit a single authoritative unlinked event.
+    this.emitEvent({ type: 'unlinked', relPath })
+  }
+
+  /**
+   * Promote one or more bullets to standalone pages (atomic, mutex-protected).
+   *
+   * Algorithm (all under configMutex):
+   *   1. Skip targets that are already coded (text starts with `[[`).
+   *   2. Reserve N codes (one per non-skipped target) atomically.
+   *   3. For each non-skipped target, write a new page:
+   *        - frontmatter: `code`, `createdAt`
+   *        - body: `# <title>\n\n<childBody>` (childBody is recursive, computed
+   *          by renderer via `serializeChildrenBody` — Bug #2 fix).
+   *   4. Rewrite the parent page body: use `planPromotion` to construct the
+   *      correct `[[code]] text [^blockId]` wikilink lines (Bug #1 fix), then
+   *      match bullets by stable `blockId` or text (Bug #3 fix), serialize and
+   *      `writePage`.
+   *   5. On any failure after files have been written, trash them and re-throw
+   *      (rollback — codes are burnt; vault remains consistent).
+   *
+   * `req.rewrittenBodies` is intentionally ignored — main constructs all rewritten
+   * lines itself after codes are reserved, so the renderer can never inject
+   * `[[PLACEHOLDER]]` text.
+   */
+  async promote(req: PromotionRequest): Promise<PromotionResult> {
+    const vault = this.requireVault()
+    const { targets, parentPage } = req
+
+    // ── 1. Determine skip/promote sets ──────────────────────────────────────
+    const toPromote: Array<{ target: typeof targets[number] }> = []
+    let skipped = 0
+    for (const target of targets) {
+      const isAlreadyCoded = target.text.trimStart().startsWith('[[')
+      if (isAlreadyCoded) {
+        skipped++
+        continue
+      }
+      toPromote.push({ target })
+    }
+
+    const n = toPromote.length
+    if (n === 0) {
+      return { codes: [], skipped, relPaths: [] }
+    }
+
+    const createdAbsPaths: string[] = []
+    const codes: string[] = []
+    const relPaths: string[] = []
+
+    await this.configMutex.acquire()
+    try {
+      // ── 2. Reserve N codes atomically ─────────────────────────────────────
+      const { config: currentConfig } = await loadConfig(vault.rootPath)
+      const prefix = currentConfig.codePrefix
+      const { config: updatedConfig, codes: reservedCodes } = reserveCodes(currentConfig, prefix, n)
+      await saveConfig(vault.rootPath, updatedConfig)
+      vault.config = updatedConfig
+
+      // ── 3. Write N new pages ───────────────────────────────────────────────
+      // Build rewrite map at the same time (code is known after step 2).
+      // Map key: blockId (stable disk key) → rewritten text.
+      // The renderer guarantees every target has a blockId (lazily assigned at
+      // promotion time — FR-7 / US-005 / text-fallback-collision fix).
+      const rewriteByBlockId = new Map<string, string>()
+
+      for (let i = 0; i < n; i++) {
+        const { target } = toPromote[i]!
+        const code = reservedCodes[i]!
+        const title = target.text.trim()
+        const childBody = target.childBody ?? ''
+        const newBody = childBody
+          ? `# ${title}\n\n${childBody}`
+          : `# ${title}\n`
+
+        const newRelPath = `${code}.md`
+        const newAbsPath = path.join(vault.rootPath, newRelPath)
+        // QA Bug #7: refuse to overwrite a pre-existing file with the same code.
+        // Codes are monotonic so this is unlikely, but a foreign file named
+        // e.g. `TDC-5.md` would be silently clobbered without this guard.
+        const targetExists = await fs.access(newAbsPath).then(() => true).catch(() => false)
+        if (targetExists) {
+          throw new Error(
+            `Promote aborted: target file '${newRelPath}' already exists. ` +
+              'The code counter is kept bumped; this code is now reserved.',
+          )
+        }
+        const now = new Date().toISOString()
+
+        const newPage: import('@todontic/shared').ParsedPage = {
+          relPath: newRelPath,
+          filePath: newAbsPath,
+          frontmatter: { code, createdAt: now },
+          foreignFrontmatter: '',
+          todonticFirst: false,
+          body: newBody,
+          title,
+          blockIds: [],
+          hadFrontmatter: true,
+          eol: '\n',
+          trailingNewline: true,
+        }
+
+        const serialized = serializePage(newPage)
+        // Register self-write BEFORE atomic write.
+        vault.watcher.registerSelfWrite(newAbsPath)
+        await atomicWrite(newAbsPath, serialized)
+        createdAbsPaths.push(newAbsPath)
+        vault.pages.set(newRelPath, newPage)
+        codes.push(code)
+        relPaths.push(newRelPath)
+
+        // Bug #1 fix: main constructs the rewritten line using planPromotion
+        // which emits `[[code]] text [^blockId]` — never a placeholder.
+        // We synthesize a minimal Bullet object from the target fields so
+        // planPromotion can compute the correct blockId suffix.
+        const syntheticBullet: import('@todontic/core').Bullet = {
+          id: target.bulletId,
+          text: title,
+          blockId: target.blockId,
+          collapsed: false,
+          children: [],
+        }
+        const plan = planPromotion(syntheticBullet, code)
+        // rewrittenLine is `- [[code]] text [^blockId]` — strip `- ` prefix
+        // to get the bullet text that serializeOutline will re-prepend.
+        const rewrittenText = plan.rewrittenLine.startsWith('- ')
+          ? plan.rewrittenLine.slice(2)
+          : plan.rewrittenLine
+
+        // Text-fallback-collision fix: match exclusively by blockId.
+        // The renderer ensures every target has a blockId (assigned lazily if
+        // the bullet had none — FR-7).  If blockId is somehow absent, skip
+        // the rewrite for this target rather than risk a text collision.
+        if (target.blockId) {
+          rewriteByBlockId.set(target.blockId, rewrittenText)
+        }
+      }
+
+      // ── 4. Rewrite parent page ─────────────────────────────────────────────
+      // Parse the parent body's outline region from the authoritative page
+      // object passed in the request (same snapshot the user sees).
+      const region = parseOutline(parentPage.body)
+
+      // Walk bullets and rewrite matched ones.
+      // Match exclusively by blockId — the renderer guarantees every promoted
+      // target carries a blockId (lazily assigned before the request is sent).
+      // This eliminates the text-fallback path that caused duplicate-text
+      // siblings to be mis-linked and have their children silently stripped.
+      function rewriteBullets(bullets: import('@todontic/core').Bullet[]): import('@todontic/core').Bullet[] {
+        return bullets.map((b) => {
+          const newText = b.blockId ? rewriteByBlockId.get(b.blockId) : undefined
+          if (newText !== undefined) {
+            // Children moved to the new page; collapse them here.
+            return { ...b, text: newText, children: [] }
+          }
+          return { ...b, children: rewriteBullets(b.children) }
+        })
+      }
+
+      const rewrittenRegion = {
+        ...region,
+        bullets: rewriteBullets(region.bullets),
+      }
+
+      const newBody = serializeOutline(rewrittenRegion)
+      const rewrittenParent: import('@todontic/shared').ParsedPage = {
+        ...parentPage,
+        body: newBody,
+      }
+
+      // writePage handles atomic write + self-write suppression + index upsert.
+      await this.writePage(rewrittenParent)
+      rebuildIndex(vault)
+    } catch (err) {
+      // ── 5. Rollback: trash any files already created ─────────────────────
+      for (const absPath of createdAbsPaths) {
+        const relPath = path.relative(vault.rootPath, absPath)
+        vault.pages.delete(relPath)
+        await trashItem(absPath)
+      }
+      rebuildIndex(vault)
+      throw err
+    } finally {
+      this.configMutex.release()
+    }
+
+    // Emit created events so the renderer's wikilink index updates.
+    for (const relPath of relPaths) {
+      const page = vault.pages.get(relPath)
+      if (page) {
+        this.emitEvent({ type: 'created', relPath, page })
+      }
+    }
+
+    return { codes, skipped, relPaths }
+  }
+
+  // ─── Index summary ─────────────────────────────────────────────────────────
+
+  /**
+   * Return a lightweight index summary for wikilink autocomplete.
+   *
+   * Extracts only codes + titles + blockId keys from the live in-memory index.
+   * Does NOT ship full page content to the renderer.
+   */
+  getIndexSummary(): IndexSummary {
+    const vault = this.requireVault()
+    const pages: IndexSummary['pages'] = []
+    for (const [, page] of vault.pages) {
+      const code = page.frontmatter.code
+      if (typeof code === 'string' && code.length > 0) {
+        pages.push({ code, title: page.title })
+      }
+    }
+    const blockIdKeys = [...vault.index.blockIds.keys()]
+    return { pages, blockIdKeys }
+  }
+
+  /**
+   * List EVERY page in the vault by its real relative path + title.
+   *
+   * Unlike {@link getIndexSummary} (coded pages only, for autocomplete), this
+   * returns all parsed markdown pages — including plain uncoded notes — so the
+   * sidebar can open any file the user owns. Sorted by title (then relPath).
+   */
+  listPages(): PageSummary[] {
+    const vault = this.requireVault()
+    const pages: PageSummary[] = []
+    for (const [relPath, page] of vault.pages) {
+      pages.push({ relPath, title: page.title })
+    }
+    pages.sort((a, b) => {
+      const ka = (a.title ?? a.relPath).toLocaleLowerCase()
+      const kb = (b.title ?? b.relPath).toLocaleLowerCase()
+      return ka.localeCompare(kb)
+    })
+    return pages
   }
 
   // ─── Accessors ─────────────────────────────────────────────────────────────
