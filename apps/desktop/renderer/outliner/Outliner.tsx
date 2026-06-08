@@ -55,6 +55,45 @@ interface Props {
   onNavigate?: (relPath: string) => void
 }
 
+/** The concrete BlockNote editor instance type (default schema). */
+export type BlockNoteEditorInstance = ReturnType<typeof useCreateBlockNote>
+
+// ─── PageEditor (keyed, remounts per loaded page) ───────────────────────────────
+
+/** BlockNote requires a non-empty initialContent; placeholder for empty pages. */
+const PLACEHOLDER_BLOCK: import('@blocknote/core').PartialBlock = {
+  type: 'bulletListItem',
+  content: [],
+}
+
+/**
+ * Owns a single BlockNote editor instance built from `initialBullets`.
+ *
+ * Rendered with a `key` that changes on every page load (relPath + loadSeq +
+ * zoom) so React remounts a fresh editor with the right content — replacing the
+ * old imperative `replaceBlocks` swap, which was racy and could blank the editor
+ * when switching pages after an in-app navigation. Mounting with `initialContent`
+ * does NOT fire `onChange`, so a load is never mistaken for a user edit.
+ */
+function PageEditor({
+  initialBullets,
+  onReady,
+  onChange,
+}: {
+  initialBullets: Bullet[]
+  onReady: (editor: BlockNoteEditorInstance) => void
+  onChange: () => void
+}) {
+  const editor = useCreateBlockNote({
+    initialContent:
+      initialBullets.length > 0 ? bulletsToBlocks(initialBullets) : [PLACEHOLDER_BLOCK],
+  })
+  useEffect(() => {
+    onReady(editor)
+  }, [editor, onReady])
+  return <BlockNoteView editor={editor} onChange={onChange} />
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 /**
@@ -73,6 +112,28 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
   )
 
   const relPath = navState.current?.relPath ?? initialRelPath ?? null
+
+  // ── Keep sidebar selection ⇄ internal nav history in one source of truth ────
+  // `useNavigation` only reads its initial entry once (useState initializer), so
+  // after any in-app navigation (promote / wikilink / zoom / back-forward) sets
+  // `navState.current`, the `initialRelPath` prop is ignored — and the sidebar,
+  // which drives only that prop, would silently stop switching pages. These two
+  // guarded effects converge the two: each fires only on a genuine page-level
+  // mismatch, so they settle in one step without looping.
+  const currentNavRelPath = navState.current?.relPath ?? null
+  // Prop → nav state: a sidebar click (new initialRelPath) navigates the history.
+  useEffect(() => {
+    if (initialRelPath && initialRelPath !== currentNavRelPath) {
+      navigateTo({ relPath: initialRelPath })
+    }
+  }, [initialRelPath, currentNavRelPath, navigateTo])
+  // Nav state → prop: an in-app page change updates the sidebar selection.
+  // Compares relPath only, so zoom (same page) does not move the sidebar.
+  useEffect(() => {
+    if (currentNavRelPath && currentNavRelPath !== initialRelPath) {
+      onNavigate?.(currentNavRelPath)
+    }
+  }, [currentNavRelPath, initialRelPath, onNavigate])
 
   // ── Document model (Slice 4) ──────────────────────────────────────────────
   const vaultApi = vault ?? null
@@ -155,41 +216,21 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
     return zoomed?.children ?? bullets
   }, [docState.bullets, zoomState.zoomedBlockId])
 
-  // BlockNote requires a non-empty initialContent array; use a placeholder when
-  // no bullets are loaded yet (the editor will be replaced once the page loads).
-  const PLACEHOLDER_BLOCK: import('@blocknote/core').PartialBlock = {
-    type: 'bulletListItem',
-    content: [],
-  }
-  const initialContent = useMemo(
-    () => (visibleBullets.length > 0 ? bulletsToBlocks(visibleBullets) : [PLACEHOLDER_BLOCK]),
-    [],
-  )
-
-  const editor = useCreateBlockNote({ initialContent })
-
-  // Keep editor in sync with loaded bullets (when relPath changes / hot-reload).
-  //
-  // Bug #5 fix: the previous guard was `relPath !== lastRelPath.current`, which
-  // never triggered when the same page was reloaded from disk (hot-reload or
-  // "reload from disk" conflict action). We now also track a `loadSeq` counter
-  // that `useOutlinerDoc.loadPage` increments on every successful load, so any
-  // content reload — not just navigation — causes a `replaceBlocks`.
-  const lastRelPath = useRef<string | null>(null)
-  const lastLoadSeq = useRef<number>(0)
-  useEffect(() => {
-    const navigated = relPath !== lastRelPath.current
-    const reloaded = docState.loadSeq !== undefined && docState.loadSeq !== lastLoadSeq.current
-    if ((navigated || reloaded) && !docState.loading && docState.page) {
-      lastRelPath.current = relPath
-      lastLoadSeq.current = docState.loadSeq ?? 0
-      const blocks = bulletsToBlocks(docState.bullets)
-      editor.replaceBlocks(editor.document, blocks)
-    }
-  }, [relPath, docState.loading, docState.page, docState.bullets, docState.loadSeq, editor])
+  // The live BlockNote editor instance. It lives in the keyed <PageEditor>
+  // child (below) so a page LOAD remounts a fresh editor with the correct
+  // initialContent — no imperative `replaceBlocks`. Imperative content swapping
+  // was racy: under load it intermittently left the editor blank when switching
+  // pages after an in-app navigation. The child reports its editor up via
+  // `handleEditorReady`; all handlers read `editorRef.current` (guarded).
+  const editorRef = useRef<BlockNoteEditorInstance | null>(null)
+  const handleEditorReady = useCallback((e: BlockNoteEditorInstance) => {
+    editorRef.current = e
+  }, [])
 
   // Handle editor changes → updateBullets (debounced save) + wikilink detection.
   const handleChange = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
     const newBullets = blocksToBullets(editor.document)
     updateBullets(newBullets)
 
@@ -226,7 +267,7 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
       // Ignore errors reading cursor position.
     }
     setWikilinkQuery(null)
-  }, [editor, updateBullets])
+  }, [updateBullets])
 
   /**
    * Insert a wikilink `[[CODE]]` into the focused block, replacing the `[[query`
@@ -235,6 +276,8 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
   const handleWikilinkSelect = useCallback(
     (code: string) => {
       setWikilinkQuery(null)
+      const editor = editorRef.current
+      if (!editor) return
       // BlockNote doesn't expose a direct text-replace API in the stable v0.x
       // surface.  The cleanest approach: update the bullet text in our model,
       // then trigger a replaceBlocks so the editor reflects it.
@@ -262,7 +305,7 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
       const newBullets = blocksToBullets(editor.document)
       updateBullets(newBullets)
     },
-    [editor, updateBullets],
+    [updateBullets],
   )
 
   // ── Promote handler (Slice 9 / Slice 10) ────────────────────────────────
@@ -317,6 +360,8 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
 
   const handlePromote = useCallback(async () => {
     if (!vaultApi || !relPath || !docState.page || promoting) return
+    const editor = editorRef.current
+    if (!editor) return
 
     const bullets = docState.bullets
     if (bullets.length === 0) return
@@ -405,7 +450,7 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
     }
 
     await executePromote(targets, relPath, updatedParentPage)
-  }, [vaultApi, relPath, docState.page, docState.region, docState.bullets, editor, selectionState, selectionCount, promoting, executePromote])
+  }, [vaultApi, relPath, docState.page, docState.region, docState.bullets, selectionState, selectionCount, promoting, executePromote])
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
 
@@ -438,6 +483,8 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
       // COLLAPSE_CURRENT: Cmd-.
       if (mod && e.key === '.' && !shift) {
         e.preventDefault()
+        const editor = editorRef.current
+        if (!editor) return
         const focusedBlock = editor.getTextCursorPosition().block
         if (!focusedBlock) return
         const idx = editor.document.indexOf(focusedBlock)
@@ -468,6 +515,8 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
       // would give the wrong/undefined entry when nested or zoomed).
       if (mod && shift && e.key === '.') {
         e.preventDefault()
+        const editor = editorRef.current
+        if (!editor) return
         const focusedBlock = editor.getTextCursorPosition().block
         if (!focusedBlock) return
         const idx = editor.document.indexOf(focusedBlock)
@@ -516,6 +565,8 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
 
       // MULTI-SELECT EXTEND: Shift-ArrowUp / Shift-ArrowDown (US-008)
       if (shift && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !mod) {
+        const editor = editorRef.current
+        if (!editor) return
         const focusedBlock = editor.getTextCursorPosition().block
         if (!focusedBlock) return
         const idx = editor.document.indexOf(focusedBlock)
@@ -536,7 +587,7 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handlePromote, goBack, goForward, editor, docState.bullets, updateBullets, zoomIn, relPath, navigateTo, extendSelect, clearSelection, selectionCount])
+  }, [handlePromote, goBack, goForward, docState.bullets, updateBullets, zoomIn, relPath, navigateTo, extendSelect, clearSelection, selectionCount])
 
   // ── Page title for breadcrumb ─────────────────────────────────────────────
 
@@ -615,7 +666,19 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
       {/* BlockNote editor + wikilink autocomplete overlay (US-004) */}
       <div style={editorWrapStyle}>
         <div style={{ position: 'relative' }}>
-          <BlockNoteView editor={editor} onChange={handleChange} />
+          {/*
+            Keyed by relPath + loadSeq + zoom: a page LOAD (open / switch /
+            hot-reload) or zoom change remounts a fresh editor with the correct
+            initialContent, instead of imperatively swapping content (which was
+            racy and intermittently blanked the editor). Typing does NOT remount
+            (loadSeq only changes on load), so edits are preserved.
+          */}
+          <PageEditor
+            key={`${relPath ?? ''}#${docState.loadSeq}#${zoomState.zoomedBlockId ?? ''}`}
+            initialBullets={visibleBullets}
+            onReady={handleEditorReady}
+            onChange={handleChange}
+          />
           {/* Wikilink autocomplete menu (US-004): shown when user types [[ */}
           {wikilinkQuery !== null && (
             <div style={wikilinkMenuWrapStyle}>
