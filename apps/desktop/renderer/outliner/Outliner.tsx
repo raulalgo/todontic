@@ -114,26 +114,37 @@ export function Outliner({ relPath: initialRelPath, vault, onNavigate }: Props) 
   const relPath = navState.current?.relPath ?? initialRelPath ?? null
 
   // ── Keep sidebar selection ⇄ internal nav history in one source of truth ────
-  // `useNavigation` only reads its initial entry once (useState initializer), so
+  // `useNavigation` reads its initial entry only once (useState initializer), so
   // after any in-app navigation (promote / wikilink / zoom / back-forward) sets
-  // `navState.current`, the `initialRelPath` prop is ignored — and the sidebar,
-  // which drives only that prop, would silently stop switching pages. These two
-  // guarded effects converge the two: each fires only on a genuine page-level
-  // mismatch, so they settle in one step without looping.
+  // `navState.current`, the `initialRelPath` prop alone is ignored — and the
+  // sidebar, which drives only that prop, would silently stop switching pages.
+  //
+  // The two values must stay synced bidirectionally:
+  //   - sidebar click → new `initialRelPath` prop → drive the nav history.
+  //   - in-app navigation → new `navState.current` → drive App's `activePage`.
+  //
+  // Naïve "if A !== B, push" effects in BOTH directions oscillate: on the render
+  // right after a sidebar click the prop is already the new page but nav state
+  // is still the old one, so the prop→nav effect advances nav while the nav→prop
+  // effect simultaneously pushes the STALE nav value back to the prop — A↔B
+  // forever. The fix: act only on the side that actually changed since the last
+  // sync (tracked via refs), never echo a value back to its own origin.
   const currentNavRelPath = navState.current?.relPath ?? null
-  // Prop → nav state: a sidebar click (new initialRelPath) navigates the history.
+  const lastPropRelPath = useRef(initialRelPath ?? null)
+  const lastNavRelPath = useRef(currentNavRelPath)
   useEffect(() => {
-    if (initialRelPath && initialRelPath !== currentNavRelPath) {
+    const propChanged = (initialRelPath ?? null) !== lastPropRelPath.current
+    const navChanged = currentNavRelPath !== lastNavRelPath.current
+    if (propChanged && initialRelPath && initialRelPath !== currentNavRelPath) {
+      // External selection (sidebar / recents) → move the nav history to it.
       navigateTo({ relPath: initialRelPath })
-    }
-  }, [initialRelPath, currentNavRelPath, navigateTo])
-  // Nav state → prop: an in-app page change updates the sidebar selection.
-  // Compares relPath only, so zoom (same page) does not move the sidebar.
-  useEffect(() => {
-    if (currentNavRelPath && currentNavRelPath !== initialRelPath) {
+    } else if (navChanged && currentNavRelPath && currentNavRelPath !== initialRelPath) {
+      // In-app navigation → mirror the active page up so the sidebar follows.
       onNavigate?.(currentNavRelPath)
     }
-  }, [currentNavRelPath, initialRelPath, onNavigate])
+    lastPropRelPath.current = initialRelPath ?? null
+    lastNavRelPath.current = currentNavRelPath
+  }, [initialRelPath, currentNavRelPath, navigateTo, onNavigate])
 
   // ── Document model (Slice 4) ──────────────────────────────────────────────
   const vaultApi = vault ?? null

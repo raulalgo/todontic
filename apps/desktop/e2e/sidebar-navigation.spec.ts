@@ -47,13 +47,30 @@ test.describe('sidebar navigation', () => {
       return
     }
 
+    // A runaway prop⇄state sync loop surfaces as React's "Maximum update depth
+    // exceeded" pageerror — fail hard if any error fires during the journey.
+    const pageErrors: string[] = []
+    win.on('pageerror', (e) => pageErrors.push(String(e)))
+
+    // Helper: assert the open page is the given one AND stays put (no oscillation
+    // back to the previous page) over a short window.
+    async function expectStableOpenPage(relPath: string) {
+      const outliner = win.getByTestId('outliner')
+      await expect(outliner).toHaveAttribute('aria-label', `Outliner: ${relPath}`, { timeout: 5000 })
+      // Sample several times — an oscillating loop flips the label between pages.
+      for (let i = 0; i < 6; i++) {
+        await win.waitForTimeout(120)
+        expect(await outliner.getAttribute('aria-label')).toBe(`Outliner: ${relPath}`)
+      }
+    }
+
     try {
       await win.getByText(dir).waitFor({ timeout: 15_000 })
 
       // Open alpha and promote its bullet (Cmd/Ctrl-Enter) — this is the in-app
       // navigation that previously poisoned navState and broke the sidebar.
       await win.getByTestId('page-item-alpha.md').click()
-      await expect(win.getByTestId('outliner')).toHaveAttribute('aria-label', 'Outliner: alpha.md', { timeout: 5000 })
+      await expectStableOpenPage('alpha.md')
 
       const editable = win.locator('.bn-editor [contenteditable="true"], .ProseMirror').first()
       await editable.click()
@@ -61,18 +78,21 @@ test.describe('sidebar navigation', () => {
       await win.keyboard.press(promote)
 
       // After promote the view navigates to the new page (TDC-1.md) and it
-      // appears in the sidebar.
-      await expect(win.getByTestId('outliner')).toHaveAttribute('aria-label', 'Outliner: TDC-1.md', { timeout: 5000 })
+      // appears in the sidebar — and must stay there (no sync oscillation).
+      await expectStableOpenPage('TDC-1.md')
       await expect(win.getByTestId('page-item-TDC-1.md')).toBeVisible({ timeout: 5000 })
 
-      // THE REGRESSION: click beta in the sidebar — it must switch.
+      // THE REGRESSION: click beta in the sidebar — it must switch AND stay put,
+      // not flip back to the previously-open (promoted) page.
       await win.getByTestId('page-item-beta.md').click()
-      await expect(win.getByTestId('outliner')).toHaveAttribute('aria-label', 'Outliner: beta.md', { timeout: 5000 })
+      await expectStableOpenPage('beta.md')
       await expect(editable).toContainText('beta bullet', { timeout: 5000 })
 
-      // And back to alpha, to be sure the sidebar is fully alive.
+      // And back to alpha, to be sure the sidebar is fully alive and stable.
       await win.getByTestId('page-item-alpha.md').click()
-      await expect(win.getByTestId('outliner')).toHaveAttribute('aria-label', 'Outliner: alpha.md', { timeout: 5000 })
+      await expectStableOpenPage('alpha.md')
+
+      expect(pageErrors, `page errors during journey:\n${pageErrors.join('\n')}`).toEqual([])
     } finally {
       await app.close()
     }
