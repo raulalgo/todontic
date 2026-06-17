@@ -13,9 +13,21 @@
 export { splitFrontmatter, joinFrontmatter } from './frontmatter.js'
 export type { SplitResult } from './frontmatter.js'
 
-export { extractBlockIds, BLOCK_ID_RE } from './blockId.js'
+export { extractBlockIds, generateBlockId, appendBlockId, BLOCK_ID_RE } from './blockId.js'
 
 export { parsePage, serializePage, roundTrip } from './page.js'
+
+export { parseOutline, serializeOutline } from './outline.js'
+export type { Bullet, OutlineRegion } from './outline.js'
+
+export {
+  planPromotion,
+  planBulkPromotion,
+  applyPromotionToParentBullets,
+  serializeChildrenBody,
+  isAlreadyCoded,
+} from './promote.js'
+export type { PromotionPlan, BulkPromotionPlan } from './promote.js'
 
 export { buildIndex, WIKILINK_RE } from './vaultIndex.js'
 

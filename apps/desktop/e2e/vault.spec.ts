@@ -123,8 +123,8 @@ test.describe('vault smoke', () => {
     }
 
     try {
-      // "Vault is open" indicator should appear once the auto-reopen completes.
-      await win.getByText('Vault is open').waitFor({ timeout: 15_000 })
+      // The vault path appears in the workspace header once auto-reopen completes.
+      await win.getByText(tempDir).waitFor({ timeout: 15_000 })
 
       // Assert that .todontic/config.yml exists on disk.
       await expect(access(join(tempDir, '.todontic', 'config.yml'))).resolves.toBeUndefined()
@@ -148,8 +148,8 @@ test.describe('vault smoke', () => {
     }
 
     try {
-      // Wait for vault-open state.
-      await win.getByText('Vault is open').waitFor({ timeout: 15_000 })
+      // Wait for vault-open state (vault path shown in workspace header).
+      await win.getByText(tempDir).waitFor({ timeout: 15_000 })
 
       // Open settings.
       await win.getByTestId('open-settings').click()

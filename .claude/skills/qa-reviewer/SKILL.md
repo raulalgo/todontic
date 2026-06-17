@@ -108,6 +108,7 @@ Features spanning files (slice + component + route, thunk + slice + selector):
 - Assertion-free (`render` no `expect`) → 🟡
 - Snapshot-only for behaviour-changing components → 🔵
 - Over-mocking (mock the SUT, not its deps) → 🟡
+- **Fixture encodes the implementation's assumption → 🔴.** The single highest-value QA check. A test whose mock/fixture is *shaped to match what the code does* rather than what real data looks like proves nothing — author and implementer share the same false belief, so the test passes while the app breaks. Tells: the fixture only ever contains the "happy shape" the code assumes (e.g. every page has a `code`, every list non-empty, every id present); the test's expected value is *derived the same way the SUT derives it* (both compute `${code}.md`); no test uses a plain/realistic specimen (an uncoded note, an empty result, a renamed file). For any data-driven feature, demand at least one test with a **realistic, code-independent fixture** — ideally lifted from a real sample (e.g. the project's test vault), not hand-crafted to fit. Missing → 🔴 and put the realistic case at the top of the manual plan.
 - Hard-coded waits (`setTimeout`, `sleep(500)`) → 🟡 (use `waitFor`/`findBy*`)
 - Shared mutable state across tests, missing `beforeEach` reset → 🟡
 - Testing implementation (internal state, class names, `container.querySelector` when role/label exists) → 🔵
@@ -118,6 +119,8 @@ Features spanning files (slice + component + route, thunk + slice + selector):
 Lens: *"how does this break for a real user?"*
 
 Use `references/qa-bug-checklist.md`. Walk relevant categories per changed component / hook / thunk. Report only if concrete reproduction path exists — otherwise move to manual plan.
+
+**Reachability lens (run first, before micro-bugs).** Before hunting edge cases, prove the headline feature is actually *reachable and wired* in the running app with realistic data — this is where "passed tests, broken in app" hides. For each user story, trace the live path end to end: is the component mounted in a route a user can reach? Is its data source the *general* one (all pages) or a *narrow* one that happens to work for the demo fixture (only coded pages)? Does a brand-new/empty/plain instance (fresh vault, no items, uncoded note) leave a dead end? A component that exists, typechecks, and has green unit tests but is unreachable or fed the wrong data source in the real app is a 🔴 — say so plainly even though "the code is all there."
 
 ## Phase 5: Manual plan
 

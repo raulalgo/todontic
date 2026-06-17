@@ -12,6 +12,11 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@blocknote/core": "0.51.4",
+    "@blocknote/mantine": "0.51.4",
+    "@blocknote/react": "0.51.4",
+    "@mantine/core": "^8.3.18",
+    "@mantine/hooks": "^8.3.18",
     "@todontic/agents": "workspace:*",
     "@todontic/core": "workspace:*",
     "@todontic/mcp-installer": "workspace:*",

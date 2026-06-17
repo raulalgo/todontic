@@ -54,8 +54,34 @@ export interface TodonticFrontmatter {
   createdAt?: string
   /** ISO-8601 last-modified timestamp. */
   updatedAt?: string
+  /**
+   * Block IDs of bullets that are currently collapsed (FR-6).
+   * Bare 6-char IDs — no caret prefix.
+   */
+  collapsed?: string[]
   /** Arbitrary additional keys preserved from/to the `todontic:` map. */
   [key: string]: unknown
+}
+
+/**
+ * A single bullet in the outliner's in-memory tree (PRD-01).
+ *
+ * `collapsed` is a runtime flag overlaid from `todontic.collapsed` frontmatter;
+ * it is never encoded in the markdown body.
+ */
+export interface Bullet {
+  /** Stable opaque session ID (not the block ID). */
+  id: string
+  /** Trailing `^xxxxxx` block ID, if the bullet has one. */
+  blockId?: string
+  /** Inline markdown content of the bullet. */
+  text: string
+  /** Runtime collapse state. */
+  collapsed: boolean
+  /** Child bullets. */
+  children: Bullet[]
+  /** Original list marker found on disk (`-`, `*`, `+`). */
+  sourceMarker?: string
 }
 
 /**
@@ -188,6 +214,77 @@ export interface RecentVault {
   lastOpened: string
 }
 
+// ─── Promotion ────────────────────────────────────────────────────────────────
+
+/**
+ * A single bullet targeted for promotion.
+ * Used in both single and bulk promotion requests.
+ */
+export interface PromotionTarget {
+  /** The session ID of the bullet (used for identification in the tree). */
+  bulletId: string
+  /** The bullet text (becomes the title + H1 of the new page). */
+  text: string
+  /** Block ID of the bullet, if present. Preserved in the wikilink. */
+  blockId?: string
+  /** Child bullets' serialised body (pre-computed by the renderer). */
+  childBody: string
+}
+
+/**
+ * Request payload for `vault.promote`.
+ */
+export interface PromotionRequest {
+  /** Vault-relative path of the parent page being rewritten. */
+  parentRelPath: string
+  /** The bullets to promote, in document order. */
+  targets: PromotionTarget[]
+  /** The full parent page (used for atomic rewrite). */
+  parentPage: ParsedPage
+  /** New bullet texts to replace each promoted bullet with `[[CODE]] text`. */
+  rewrittenBodies: string[]
+}
+
+/**
+ * Result of a successful promotion.
+ */
+export interface PromotionResult {
+  /** Codes of the newly created pages, in the same order as `targets`. */
+  codes: string[]
+  /** Number of targets that were skipped (already had a code). */
+  skipped: number
+  /** Relative paths of the created pages. */
+  relPaths: string[]
+}
+
+// ─── Index summary ────────────────────────────────────────────────────────────
+
+/**
+ * A lightweight summary of the vault index sent to the renderer for wikilink
+ * autocomplete. Does NOT include full page content (only codes + titles + block IDs).
+ */
+export interface IndexSummary {
+  /** All pages with a todontic code: `{ code, title }[]`. */
+  pages: Array<{ code: string; title: string | null }>
+  /** Block IDs keyed as `CODE#^id`. */
+  blockIdKeys: string[]
+}
+
+/**
+ * A single page in the vault, identified by its real on-disk relative path.
+ *
+ * Unlike {@link IndexSummary} (which lists only *coded* pages for autocomplete),
+ * this represents EVERY markdown page in the vault — including plain, uncoded
+ * notes. It is what the page-list / sidebar renders so a user can open any file
+ * they own, not just promoted ones.
+ */
+export interface PageSummary {
+  /** Vault-relative path, e.g. `sample-note-1.md` or `CUR-12.md`. */
+  relPath: string
+  /** First heading / inferred title, or null. */
+  title: string | null
+}
+
 // ─── IPC contract ─────────────────────────────────────────────────────────────
 
 /**
@@ -281,4 +378,29 @@ export interface VaultApi {
    * Returns an unsubscribe function.
    */
   onVaultEvent(cb: (payload: VaultEventPayload) => void): () => void
+
+  /**
+   * Return a lightweight index summary for wikilink autocomplete.
+   * Contains only codes, titles, and block ID keys — not full page content.
+   */
+  getIndexSummary(): Promise<IndexSummary>
+
+  /**
+   * List EVERY page in the open vault by its real relative path + title,
+   * sorted by title (falling back to relPath). Includes plain uncoded notes.
+   * This is what the sidebar / page list renders. Returns [] if no vault open.
+   */
+  listPages(): Promise<PageSummary[]>
+
+  /**
+   * Move a page file to the OS trash (recoverable). Updates index.
+   * @param relPath - Vault-relative path of the page to trash.
+   */
+  deletePage(relPath: string): Promise<void>
+
+  /**
+   * Promote one or more bullets to standalone pages (atomic, under mutex).
+   * All-or-none: on failure, any created files are trashed and parent is unchanged.
+   */
+  promote(req: PromotionRequest): Promise<PromotionResult>
 }

@@ -112,6 +112,7 @@ export class VaultWatcher {
 
   private handleUnlink(absPath: string): void {
     if (!absPath.endsWith('.md')) return
+    if (this.isSelfWrite(absPath)) return
     const relPath = path.relative(this.rootPath, absPath).split(path.sep).join('/')
     this.onEvent({ type: 'unlinked', relPath })
   }

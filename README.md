@@ -13,7 +13,7 @@ both D-001 (BYO-AI detection) and D-008 (install MCPs into the user's CLI config
 ## Stack
 
 Electron + React + TypeScript · pnpm workspaces · Vite (via electron-vite) · Biome ·
-Vitest (unit) · Playwright (e2e). Outliner: BlockNote (added when PRD-01 lands).
+Vitest (unit) · Playwright (e2e). Outliner: BlockNote (Tiptap/ProseMirror).
 
 ## Layout
 

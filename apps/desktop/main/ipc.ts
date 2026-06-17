@@ -9,7 +9,7 @@
  * `@todontic/shared`.
  */
 
-import type { ParsedPage, VaultConfig, VaultEventPayload } from '@todontic/shared'
+import type { ParsedPage, PromotionRequest, VaultConfig, VaultEventPayload } from '@todontic/shared'
 import { dialog, ipcMain } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { isVaultInitialised } from './vault/configStore.js'
@@ -31,6 +31,10 @@ export const VAULT_CHANNELS = {
   setConfig: 'vault:setConfig',
   reserveCodes: 'vault:reserveCodes',
   event: 'vault:event',
+  getIndexSummary: 'vault:getIndexSummary',
+  listPages: 'vault:listPages',
+  deletePage: 'vault:deletePage',
+  promote: 'vault:promote',
 } as const
 
 // ─── Registration ─────────────────────────────────────────────────────────────
@@ -130,6 +134,26 @@ export function registerVaultIpc(getWindow: () => BrowserWindow | null): VaultMa
   // setConfig, preventing lost-update races (Findings #1 and #2 fix).
   ipcMain.handle(VAULT_CHANNELS.reserveCodes, async (_event, prefix: string, n: number) => {
     return manager.reserveCodes(prefix, n)
+  })
+
+  // ── vault:getIndexSummary ──────────────────────────────────────────────────
+  ipcMain.handle(VAULT_CHANNELS.getIndexSummary, () => {
+    return manager.getIndexSummary()
+  })
+
+  // ── vault:listPages ────────────────────────────────────────────────────────
+  ipcMain.handle(VAULT_CHANNELS.listPages, () => {
+    return manager.listPages()
+  })
+
+  // ── vault:deletePage ───────────────────────────────────────────────────────
+  ipcMain.handle(VAULT_CHANNELS.deletePage, async (_event, relPath: string) => {
+    await manager.deletePage(relPath)
+  })
+
+  // ── vault:promote ──────────────────────────────────────────────────────────
+  ipcMain.handle(VAULT_CHANNELS.promote, async (_event, req: PromotionRequest) => {
+    return manager.promote(req)
   })
 
   return manager
